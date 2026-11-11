@@ -1,0 +1,39 @@
+
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "ViCare-Integration auswählen",
+        "description": "Wähle die vorhandene offizielle ViCare-Integration aus.",
+        "data": {
+          "vicare_entry_id": "ViCare-Integration"
+        }
+      },
+      "device": {
+        "title": "ViCare-Gerät auswählen",
+        "description": "Wähle das Gerät aus, dessen Heizkurven synchronisiert werden sollen.",
+        "data": {
+          "vicare_device": "ViCare-Gerät"
+        }
+      }
+    },
+    "abort": {
+      "no_vicare_entry": {
+        "title": "ViCare nicht gefunden",
+        "description": "Bitte richte zuerst die offizielle ViCare-Integration in Home Assistant ein."
+      },
+      "vicare_not_ready": {
+        "title": "ViCare noch nicht bereit",
+        "description": "Die ViCare-Integration ist noch nicht vollständig geladen. Bitte versuche es später erneut."
+      },
+      "no_vicare_device": {
+        "title": "Kein geeignetes ViCare-Gerät gefunden",
+        "description": "Es wurde kein ViCare-Gerät mit zwei auslesbaren Heizkurven gefunden."
+      },
+      "already_configured": {
+        "title": "Bereits eingerichtet",
+        "description": "Dieses ViCare-Gerät ist bereits mit der Heizkurven-Synchronisierung verbunden."
+      }
+    }
+  }
+}

@@ -1,22 +1,38 @@
+
 {
   "config": {
     "step": {
       "user": {
-        "title": "ViCare Heating Curve Synchronization",
-        "description": "Select the existing ViCare integration whose heating curves should be synchronized with Home Assistant input_number helpers.",
+        "title": "Select ViCare integration",
+        "description": "Select the existing official ViCare integration.",
         "data": {
           "vicare_entry_id": "ViCare integration"
+        }
+      },
+      "device": {
+        "title": "Select ViCare device",
+        "description": "Select the device whose heating curves should be synchronized.",
+        "data": {
+          "vicare_device": "ViCare device"
         }
       }
     },
     "abort": {
       "no_vicare_entry": {
         "title": "ViCare not found",
-        "description": "Please configure the official ViCare integration in Home Assistant first."
+        "description": "Please set up the official ViCare integration first."
+      },
+      "vicare_not_ready": {
+        "title": "ViCare not ready",
+        "description": "The ViCare integration has not finished loading. Please try again later."
+      },
+      "no_vicare_device": {
+        "title": "No suitable ViCare device found",
+        "description": "No ViCare device with two readable heating curves was found."
       },
       "already_configured": {
         "title": "Already configured",
-        "description": "This ViCare integration is already connected to heating curve synchronization."
+        "description": "This ViCare device is already connected to the heating curve synchronization."
       }
     }
   }

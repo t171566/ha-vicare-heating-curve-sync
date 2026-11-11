@@ -14,6 +14,21 @@ from .coordinator import ViCareCurveSync
 _LOGGER = logging.getLogger(__name__)
 
 
+def _supports_two_curves(circuits) -> bool:
+    """Check whether the first two circuits support heating curves."""
+    if circuits is None or len(circuits) < 2:
+        return False
+
+    try:
+        for circuit in circuits[:2]:
+            float(circuit.getHeatingCurveSlope())
+            float(circuit.getHeatingCurveShift())
+    except Exception:
+        return False
+
+    return True
+
+
 async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     """Set up the integration."""
     hass.data.setdefault(DOMAIN, {})
@@ -42,7 +57,6 @@ async def async_setup_entry(
         return False
 
     devices = getattr(vicare_data, "devices", [])
-
     selected_device = None
 
     for device in devices:
@@ -53,16 +67,20 @@ async def async_setup_entry(
 
         try:
             circuits = api.circuits
+            supported = await hass.async_add_executor_job(
+                _supports_two_curves,
+                circuits,
+            )
         except Exception:
-            continue
+            supported = False
 
-        if circuits is not None and len(circuits) >= 2:
+        if supported:
             selected_device = device
             break
 
     if selected_device is None:
         _LOGGER.error(
-            "No ViCare device with at least two heating circuits was found"
+            "No ViCare device with two supported heating curves was found"
         )
         return False
 

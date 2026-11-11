@@ -1,4 +1,3 @@
-
 {
   "config": {
     "step": {
@@ -18,22 +17,10 @@
       }
     },
     "abort": {
-      "no_vicare_entry": {
-        "title": "ViCare not found",
-        "description": "Please set up the official ViCare integration first."
-      },
-      "vicare_not_ready": {
-        "title": "ViCare not ready",
-        "description": "The ViCare integration has not finished loading. Please try again later."
-      },
-      "no_vicare_device": {
-        "title": "No suitable ViCare device found",
-        "description": "No ViCare device with two readable heating curves was found."
-      },
-      "already_configured": {
-        "title": "Already configured",
-        "description": "This ViCare device is already connected to the heating curve synchronization."
-      }
+      "no_vicare_entry": "Please set up the official ViCare integration first.",
+      "vicare_not_ready": "The ViCare integration has not finished loading. Please try again later.",
+      "no_vicare_device": "No usable ViCare device with two heating curves was found.",
+      "already_configured": "This ViCare device is already connected to the heating curve synchronization."
     }
   }
 }

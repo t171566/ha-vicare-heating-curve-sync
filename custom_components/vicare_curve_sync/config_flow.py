@@ -7,10 +7,9 @@ import voluptuous as vol
 
 from homeassistant import config_entries
 
-from .const import CONF_VICARE_ENTRY_ID, DOMAIN
+from .const import CONF_VICARE_DEVICE, CONF_VICARE_ENTRY_ID, DOMAIN
 
 
-CONF_VICARE_DEVICE = "vicare_device"
 
 
 class ViCareCurveSyncConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):

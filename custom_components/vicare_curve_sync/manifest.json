@@ -12,8 +12,8 @@
     "vicare"
   ],
   "documentation": "https://github.com/t171566/ha-vicare-heating-curve-sync",
-  "issue_tracker": "https://github.com/t171566/ha-vicare-heating-curve-sync/issues",
   "iot_class": "cloud_polling",
+  "issue_tracker": "https://github.com/t171566/ha-vicare-heating-curve-sync/issues",
   "requirements": [],
   "version": "0.2.0"
 }

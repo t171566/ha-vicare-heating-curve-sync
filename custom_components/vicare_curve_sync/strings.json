@@ -1,0 +1,11 @@
+
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "ViCare Heizkurven-Synchronisierung",
+        "description": "Synchronisierung der Heizkurven zwischen ViCare und Home Assistant einrichten."
+      }
+    }
+  }
+}

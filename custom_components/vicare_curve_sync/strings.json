@@ -4,7 +4,20 @@
     "step": {
       "user": {
         "title": "ViCare Heizkurven-Synchronisierung",
-        "description": "Synchronisierung der Heizkurven zwischen ViCare und Home Assistant einrichten."
+        "description": "Wähle die vorhandene ViCare-Integration aus, deren Heizkurven mit den Home-Assistant-Eingabehelfern synchronisiert werden sollen.",
+        "data": {
+          "vicare_entry_id": "ViCare-Integration"
+        }
+      }
+    },
+    "abort": {
+      "no_vicare_entry": {
+        "title": "ViCare nicht gefunden",
+        "description": "Bitte richte zuerst die offizielle ViCare-Integration in Home Assistant ein."
+      },
+      "already_configured": {
+        "title": "Bereits eingerichtet",
+        "description": "Diese ViCare-Integration ist bereits mit der Heizkurven-Synchronisierung verbunden."
       }
     }
   }

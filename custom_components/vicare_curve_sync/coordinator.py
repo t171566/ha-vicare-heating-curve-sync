@@ -15,7 +15,7 @@ _LOGGER = logging.getLogger(__name__)
 
 
 class ViCareCurveSync:
-    """Synchronize two ViCare heating circuits with HA input_number helpers."""
+    """Synchronize ViCare heating circuits with HA input_number helpers."""
 
     def __init__(self, hass: HomeAssistant, vicare_device) -> None:
         """Initialize the synchronizer."""
@@ -78,36 +78,35 @@ class ViCareCurveSync:
         """Read slope and shift from ViCare."""
         circuit = self.circuits[circuit_index]
 
-        slope, shift = await self.hass.async_add_executor_job(
+        return await self.hass.async_add_executor_job(
             lambda: (
                 float(circuit.getHeatingCurveSlope()),
                 float(circuit.getHeatingCurveShift()),
             )
         )
 
-        return slope, shift
-
     async def async_update_helpers_from_vicare(self) -> None:
         """Copy current ViCare values into the HA helpers."""
         if self._stopped:
             return
 
-        for circuit_index, mapping in CIRCUIT_HELPERS.items():
-            try:
-                slope, shift = await self._read_curve(circuit_index)
-            except Exception:
-                _LOGGER.exception(
-                    "Could not read ViCare heating curve for circuit %s",
-                    circuit_index,
-                )
-                continue
+        async with self._lock:
+            for circuit_index, mapping in CIRCUIT_HELPERS.items():
+                try:
+                    slope, shift = await self._read_curve(circuit_index)
+                except Exception:
+                    _LOGGER.exception(
+                        "Could not read ViCare heating curve for circuit %s",
+                        circuit_index,
+                    )
+                    continue
 
-            await self._set_helper_if_changed(
-                mapping["slope"], slope
-            )
-            await self._set_helper_if_changed(
-                mapping["shift"], shift
-            )
+                await self._set_helper_if_changed(
+                    mapping["slope"], slope
+                )
+                await self._set_helper_if_changed(
+                    mapping["shift"], shift
+                )
 
     async def _set_helper_if_changed(
         self, entity_id: str, value: float
@@ -149,21 +148,15 @@ class ViCareCurveSync:
             )
             return
 
-        try:
-            await self.hass.services.async_call(
-                "input_number",
-                "set_value",
-                {
-                    "entity_id": entity_id,
-                    "value": value,
-                },
-                blocking=True,
-            )
-        except Exception:
-            _LOGGER.exception(
-                "Could not update helper %s",
-                entity_id,
-            )
+        await self.hass.services.async_call(
+            "input_number",
+            "set_value",
+            {
+                "entity_id": entity_id,
+                "value": value,
+            },
+            blocking=True,
+        )
 
     @callback
     def _async_state_changed(self, event: Event) -> None:
@@ -210,19 +203,56 @@ class ViCareCurveSync:
             if self._stopped:
                 return
 
+            circuit = self.circuits[circuit_index]
+
             try:
                 slope, shift = await self._read_curve(circuit_index)
 
                 if changed_value == "slope":
                     if abs(slope - value) < 0.0001:
                         return
+
+                    minimum, maximum = await self.hass.async_add_executor_job(
+                        lambda: (
+                            float(circuit.getHeatingCurveSlopeMin()),
+                            float(circuit.getHeatingCurveSlopeMax()),
+                        )
+                    )
+
+                    if not minimum <= value <= maximum:
+                        _LOGGER.warning(
+                            "Slope %s for circuit %s is outside ViCare limits %s to %s",
+                            value,
+                            circuit_index,
+                            minimum,
+                            maximum,
+                        )
+                        return
+
                     slope = value
+
                 else:
                     if abs(shift - value) < 0.0001:
                         return
-                    shift = value
 
-                circuit = self.circuits[circuit_index]
+                    minimum, maximum = await self.hass.async_add_executor_job(
+                        lambda: (
+                            float(circuit.getHeatingCurveShiftMin()),
+                            float(circuit.getHeatingCurveShiftMax()),
+                        )
+                    )
+
+                    if not minimum <= value <= maximum:
+                        _LOGGER.warning(
+                            "Shift %s for circuit %s is outside ViCare limits %s to %s",
+                            value,
+                            circuit_index,
+                            minimum,
+                            maximum,
+                        )
+                        return
+
+                    shift = value
 
                 await self.hass.async_add_executor_job(
                     circuit.setHeatingCurve,

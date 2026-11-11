@@ -18,22 +18,10 @@
       }
     },
     "abort": {
-      "no_vicare_entry": {
-        "title": "ViCare nicht gefunden",
-        "description": "Bitte richte zuerst die offizielle ViCare-Integration in Home Assistant ein."
-      },
-      "vicare_not_ready": {
-        "title": "ViCare noch nicht bereit",
-        "description": "Die ViCare-Integration ist noch nicht vollständig geladen. Bitte versuche es später erneut."
-      },
-      "no_vicare_device": {
-        "title": "Kein ViCare-Gerät gefunden",
-        "description": "Es wurde kein verwendbares ViCare-Gerät gefunden."
-      },
-      "already_configured": {
-        "title": "Bereits eingerichtet",
-        "description": "Dieses ViCare-Gerät ist bereits mit der Heizkurven-Synchronisierung verbunden."
-      }
+      "no_vicare_entry": "Bitte richte zuerst die offizielle ViCare-Integration in Home Assistant ein.",
+      "vicare_not_ready": "Die ViCare-Integration ist noch nicht vollständig geladen. Bitte versuche es später erneut.",
+      "no_vicare_device": "Es wurde kein verwendbares ViCare-Gerät mit zwei Heizkurven gefunden.",
+      "already_configured": "Dieses ViCare-Gerät ist bereits mit der Heizkurven-Synchronisierung verbunden."
     }
   }
 }

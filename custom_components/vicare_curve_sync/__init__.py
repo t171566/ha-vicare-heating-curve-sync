@@ -14,19 +14,22 @@ from .coordinator import ViCareCurveSync
 _LOGGER = logging.getLogger(__name__)
 
 
-def _supports_two_curves(circuits) -> bool:
-    """Check whether the first two circuits support heating curves."""
-    if circuits is None or len(circuits) < 2:
-        return False
-
+def _get_supported_circuits(api):
+    """Load and check the first two supported ViCare heating circuits."""
     try:
+        circuits = api.circuits
+
+        if circuits is None or len(circuits) < 2:
+            return None
+
         for circuit in circuits[:2]:
             float(circuit.getHeatingCurveSlope())
             float(circuit.getHeatingCurveShift())
-    except Exception:
-        return False
 
-    return True
+        return circuits
+
+    except Exception:
+        return None
 
 
 async def async_setup(hass: HomeAssistant, config: dict) -> bool:
@@ -56,8 +59,9 @@ async def async_setup_entry(
         _LOGGER.error("ViCare runtime data is not available")
         return False
 
-    devices = getattr(vicare_data, "devices", [])
+        devices = getattr(vicare_data, "devices", [])
     selected_device = None
+    selected_circuits = None
 
     for device in devices:
         api = getattr(device, "api", None)
@@ -65,17 +69,14 @@ async def async_setup_entry(
         if api is None:
             continue
 
-        try:
-            circuits = api.circuits
-            supported = await hass.async_add_executor_job(
-                _supports_two_curves,
-                circuits,
-            )
-        except Exception:
-            supported = False
+        circuits = await hass.async_add_executor_job(
+            _get_supported_circuits,
+            api,
+        )
 
-        if supported:
+        if circuits is not None:
             selected_device = device
+            selected_circuits = circuits
             break
 
     if selected_device is None:
@@ -84,7 +85,9 @@ async def async_setup_entry(
         )
         return False
 
-    synchronizer = ViCareCurveSync(hass, selected_device)
+    synchronizer = ViCareCurveSync(
+        hass, selected_device, selected_circuits
+    )
 
     try:
         await synchronizer.async_start()

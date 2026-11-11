@@ -30,6 +30,7 @@ between ViCare heating curves and input_number helpers.
 4. Restart Home Assistant.
 5. Add the integration through Settings → Devices & Services.
 6. Select the existing ViCare integration.
+7. Select the ViCare device that provides the two heating circuits.
 
 ## License
 

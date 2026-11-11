@@ -10,6 +10,22 @@ from homeassistant import config_entries
 from .const import CONF_VICARE_DEVICE, CONF_VICARE_ENTRY_ID, DOMAIN
 
 
+def _has_supported_curves(api) -> bool:
+    """Check whether the device provides two readable heating curves."""
+    try:
+        circuits = api.circuits
+
+        if circuits is None or len(circuits) < 2:
+            return False
+
+        for circuit in circuits[:2]:
+            float(circuit.getHeatingCurveSlope())
+            float(circuit.getHeatingCurveShift())
+
+        return True
+
+    except Exception:
+        return False
 
 
 class ViCareCurveSyncConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
@@ -43,7 +59,7 @@ class ViCareCurveSyncConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         )
 
     async def async_step_device(self, user_input=None):
-        """Select the ViCare device."""
+        """Select a ViCare device with two readable heating curves."""
         vicare_entry = self.hass.config_entries.async_get_entry(
             self._vicare_entry_id
         )
@@ -57,15 +73,28 @@ class ViCareCurveSyncConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             return self.async_abort(reason="vicare_not_ready")
 
         devices = getattr(vicare_data, "devices", [])
+        options = {}
 
-        options = {
-            device.serial or str(index): (
-                f"{device.config.getModel()} – "
-                f"{device.serial or 'Gerät ' + str(index + 1)}"
+        for index, device in enumerate(devices):
+            api = getattr(device, "api", None)
+
+            if api is None:
+                continue
+
+            supported = await self.hass.async_add_executor_job(
+                _has_supported_curves,
+                api,
             )
-            for index, device in enumerate(devices)
-            if getattr(device, "api", None) is not None
-        }
+
+            if not supported:
+                continue
+
+            device_id = device.serial or str(index)
+            model = device.config.getModel()
+
+            options[device_id] = (
+                f"{model} – {device.serial or 'Gerät ' + str(index + 1)}"
+            )
 
         if not options:
             return self.async_abort(reason="no_vicare_device")

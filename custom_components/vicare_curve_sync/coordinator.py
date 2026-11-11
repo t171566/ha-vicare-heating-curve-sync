@@ -17,11 +17,11 @@ _LOGGER = logging.getLogger(__name__)
 class ViCareCurveSync:
     """Synchronize ViCare heating circuits with HA input_number helpers."""
 
-    def __init__(self, hass: HomeAssistant, vicare_device) -> None:
+    def __init__(self, hass: HomeAssistant, vicare_device, circuits) -> None:
         """Initialize the synchronizer."""
         self.hass = hass
         self.device = vicare_device
-        self.circuits = vicare_device.api.circuits
+        self.circuits = circuits
 
         self._remove_state_listener = None
         self._remove_coordinator_listener = None

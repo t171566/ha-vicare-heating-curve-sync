@@ -49,5 +49,3 @@ class ViCareCurveSyncConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             ),
         )
 
-
-async_get_options_flow = None

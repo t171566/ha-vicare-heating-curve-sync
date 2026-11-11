@@ -3,6 +3,7 @@
 
 DOMAIN = "vicare_curve_sync"
 CONF_VICARE_ENTRY_ID = "vicare_entry_id"
+CONF_VICARE_DEVICE = "vicare_device"
 
 # API-Heizkreis -> Home-Assistant-Helper
 CIRCUIT_HELPERS = {

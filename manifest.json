@@ -1,0 +1,12 @@
+
+{
+  "domain": "vicare_curve_sync",
+  "name": "ViCare Heating Curve Sync",
+  "codeowners": [],
+  "config_flow": true,
+  "dependencies": [],
+  "documentation": "https://github.com/DEIN_GITHUB_BENUTZER/ha-vicare-heating-curve-sync",
+  "iot_class": "cloud_polling",
+  "requirements": [],
+  "version": "0.1.0"
+}

@@ -59,7 +59,7 @@ async def async_setup_entry(
         _LOGGER.error("ViCare runtime data is not available")
         return False
 
-        devices = getattr(vicare_data, "devices", [])
+    devices = getattr(vicare_data, "devices", [])
     selected_device = None
     selected_circuits = None
 

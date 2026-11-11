@@ -8,7 +8,11 @@ import logging
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 
-from .const import CONF_VICARE_ENTRY_ID, DOMAIN
+from .const import (
+    CONF_VICARE_DEVICE,
+    CONF_VICARE_ENTRY_ID,
+    DOMAIN,
+)
 from .coordinator import ViCareCurveSync
 
 _LOGGER = logging.getLogger(__name__)
@@ -44,6 +48,7 @@ async def async_setup_entry(
 ) -> bool:
     """Set up ViCare Heating Curve Sync from a config entry."""
     vicare_entry_id = entry.data.get(CONF_VICARE_ENTRY_ID)
+    selected_device_id = entry.data.get(CONF_VICARE_DEVICE)
 
     vicare_entry = hass.config_entries.async_get_entry(
         vicare_entry_id
@@ -63,25 +68,32 @@ async def async_setup_entry(
     selected_device = None
     selected_circuits = None
 
-    for device in devices:
+    for index, device in enumerate(devices):
+        device_id = device.serial or str(index)
+
+        if device_id != selected_device_id:
+            continue
+
         api = getattr(device, "api", None)
 
         if api is None:
-            continue
+            break
 
-        circuits = await hass.async_add_executor_job(
+        selected_circuits = await hass.async_add_executor_job(
             _get_supported_circuits,
             api,
         )
 
-        if circuits is not None:
+        if selected_circuits is not None:
             selected_device = device
-            selected_circuits = circuits
-            break
+
+        break
 
     if selected_device is None:
         _LOGGER.error(
-            "No ViCare device with two supported heating curves was found"
+            "Selected ViCare device %s was not found or does not "
+            "provide two supported heating curves",
+            selected_device_id,
         )
         return False
 
@@ -107,7 +119,7 @@ async def async_unload_entry(
     hass: HomeAssistant,
     entry: ConfigEntry,
 ) -> bool:
-    """Unload the integration."""
+    """Unload ViCare Heating Curve Sync."""
     synchronizer = hass.data.get(DOMAIN, {}).get(entry.entry_id)
 
     if synchronizer is not None:

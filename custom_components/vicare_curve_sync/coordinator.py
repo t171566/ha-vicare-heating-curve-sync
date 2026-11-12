@@ -34,6 +34,7 @@ class ViCareCurveSync:
         self._stopped = False
         self._retry_task = None
         self._last_error = {}
+        self._pending_writes = {}
 
     async def async_start(self) -> None:
         """Start listeners and perform initial synchronization."""
@@ -119,6 +120,15 @@ class ViCareCurveSync:
                     )
 
                     await self.async_update_helpers_from_vicare()
+                    for circuit_index, pending in list(
+                        self._pending_writes.items()
+                    ):
+                        changed_value, value = pending
+                        await self._async_write_curve(
+                            circuit_index,
+                            changed_value,
+                            value,
+                        )
 
                     if not self._last_error:
                         return
@@ -282,6 +292,8 @@ class ViCareCurveSync:
 
                 if changed_value == "slope":
                     if abs(slope - value) < VALUE_TOLERANCE:
+                        self._last_error.pop(circuit_index, None)
+                        self._pending_writes.pop(circuit_index, None)
                         return
 
                     minimum, maximum = await self.hass.async_add_executor_job(
@@ -305,6 +317,8 @@ class ViCareCurveSync:
 
                 else:
                     if abs(shift - value) < VALUE_TOLERANCE:
+                        self._last_error.pop(circuit_index, None)
+                        self._pending_writes.pop(circuit_index, None)
                         return
 
                     minimum, maximum = await self.hass.async_add_executor_job(
@@ -333,6 +347,7 @@ class ViCareCurveSync:
                 )
 
                 self._last_error.pop(circuit_index, None)
+                self._pending_writes.pop(circuit_index, None)
 
                 _LOGGER.info(
                     "Updated ViCare %s: slope=%s, shift=%s",
@@ -343,6 +358,7 @@ class ViCareCurveSync:
 
             except Exception as err:
                 self._last_error[circuit_index] = str(err)
+                self._pending_writes[circuit_index] = (changed_value, value)
                 _LOGGER.warning(
                     "Could not write heating curve to ViCare for %s: %s",
                     mapping["name"],

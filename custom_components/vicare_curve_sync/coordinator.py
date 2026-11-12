@@ -62,10 +62,27 @@ class ViCareCurveSync:
 
     @callback
     def _handle_coordinator_update(self) -> None:
-        """Refresh helpers after the official ViCare integration updates."""
-        if not self._stopped:
-            self.hass.async_create_task(
-                self.async_update_helpers_from_vicare()
+        """Refresh helpers and retry pending writes after ViCare updates."""
+        if self._stopped:
+            return
+
+        self.hass.async_create_task(
+            self._async_handle_coordinator_update()
+        )
+
+    async def _async_handle_coordinator_update(self) -> None:
+        """Process a ViCare update and retry pending writes."""
+        await self.async_update_helpers_from_vicare()
+
+        if self._stopped:
+            return
+
+        for circuit_index, pending in list(self._pending_writes.items()):
+            changed_value, value = pending
+            await self._async_write_curve(
+                circuit_index,
+                changed_value,
+                value,
             )
 
     async def async_stop(self) -> None:
@@ -82,7 +99,7 @@ class ViCareCurveSync:
 
         if self._remove_coordinator_listener is not None:
             self._remove_coordinator_listener()
-            self._remove_coordinator_listener = None
+            self._remove_coordinator_listener = None 
 
     async def _read_curve(
         self, circuit_index: int

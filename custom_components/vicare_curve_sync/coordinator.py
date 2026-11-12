@@ -77,13 +77,17 @@ class ViCareCurveSync:
         if self._stopped:
             return
 
-        for circuit_index, pending in list(self._pending_writes.items()):
-            changed_value, value = pending
-            await self._async_write_curve(
-                circuit_index,
-                changed_value,
-                value,
-            )
+        for circuit_index, pending_values in list(
+            self._pending_writes.items()
+        ):
+            for changed_value, value in list(
+                pending_values.items()
+            ):
+                await self._async_write_curve(
+                    circuit_index,
+                    changed_value,
+                    value,
+                )
 
     async def async_stop(self) -> None:
         """Remove listeners and stop pending retries."""
@@ -137,17 +141,19 @@ class ViCareCurveSync:
                     )
 
                     await self.async_update_helpers_from_vicare()
-                    for circuit_index, pending in list(
+
+                    for circuit_index, pending_values in list(
                         self._pending_writes.items()
                     ):
-                        changed_value, value = pending
-                        await self._async_write_curve(
-                            circuit_index,
-                            changed_value,
-                            value,
-                        )
-
-                    if not self._last_error:
+                        for changed_value, value in list(
+                            pending_values.items()
+                        ):
+                            await self._async_write_curve(
+                                circuit_index,
+                                changed_value,
+                                value,
+                            )
+                    if not self._last_error and not self._pending_writes:
                         return
 
             except asyncio.CancelledError:
@@ -172,14 +178,20 @@ class ViCareCurveSync:
                     if not math.isfinite(slope) or not math.isfinite(shift):
                         raise ValueError("ViCare returned an invalid curve value")
 
-                    await self._set_helper_if_changed(
-                        mapping["slope"], slope
-                    )
-                    await self._set_helper_if_changed(
-                        mapping["shift"], shift
-                    )
+                    pending = self._pending_writes.get(circuit_index, {})
 
-                    self._last_error.pop(circuit_index, None)
+                    if "slope" not in pending:
+                        await self._set_helper_if_changed(
+                            mapping["slope"], slope
+                        )
+
+                    if "shift" not in pending:
+                        await self._set_helper_if_changed(
+                            mapping["shift"], shift
+                        )
+                        
+                    if not self._pending_writes.get(circuit_index):
+                        self._last_error.pop(circuit_index, None)
 
                 except Exception as err:
                     had_error = True
@@ -245,6 +257,20 @@ class ViCareCurveSync:
             blocking=True,
         )
 
+    def _clear_pending_write(
+        self, circuit_index: int, changed_value: str
+    ) -> None:
+        """Clear one pending value without removing other pending values."""
+        pending = self._pending_writes.get(circuit_index)
+
+        if pending is None:
+            return
+
+        pending.pop(changed_value, None)
+
+        if not pending:
+            self._pending_writes.pop(circuit_index, None)
+    
     @callback
     def _async_state_changed(self, event: Event) -> None:
         """Handle manual changes of HA input_number helpers."""
@@ -307,10 +333,16 @@ class ViCareCurveSync:
             try:
                 slope, shift = await self._read_curve(circuit_index)
 
+                if not math.isfinite(slope) or not math.isfinite(shift):
+                    raise ValueError(
+                        "ViCare returned an invalid curve value"
+                    )
+
                 if changed_value == "slope":
                     if abs(slope - value) < VALUE_TOLERANCE:
-                        self._last_error.pop(circuit_index, None)
-                        self._pending_writes.pop(circuit_index, None)
+                        self._clear_pending_write(circuit_index, changed_value)
+                        if not self._pending_writes.get(circuit_index):
+                            self._last_error.pop(circuit_index, None)
                         return
 
                     minimum, maximum = await self.hass.async_add_executor_job(
@@ -320,7 +352,16 @@ class ViCareCurveSync:
                         )
                     )
 
-                    if not minimum <= value <= maximum:
+                    if (
+                        not math.isfinite(value)
+                        or not math.isfinite(minimum)
+                        or not math.isfinite(maximum)
+                        or minimum > maximum
+                        or not minimum <= value <= maximum
+                    ):
+                        self._clear_pending_write(circuit_index, changed_value)
+                        if not self._pending_writes.get(circuit_index):
+                            self._last_error.pop(circuit_index, None)
                         _LOGGER.warning(
                             "Slope %s for %s is outside ViCare limits %s to %s",
                             value,
@@ -334,8 +375,9 @@ class ViCareCurveSync:
 
                 else:
                     if abs(shift - value) < VALUE_TOLERANCE:
-                        self._last_error.pop(circuit_index, None)
-                        self._pending_writes.pop(circuit_index, None)
+                        self._clear_pending_write(circuit_index, changed_value)
+                        if not self._pending_writes.get(circuit_index):
+                            self._last_error.pop(circuit_index, None)
                         return
 
                     minimum, maximum = await self.hass.async_add_executor_job(
@@ -345,7 +387,16 @@ class ViCareCurveSync:
                         )
                     )
 
-                    if not minimum <= value <= maximum:
+                    if (
+                        not math.isfinite(value)
+                        or not math.isfinite(minimum)
+                        or not math.isfinite(maximum)
+                        or minimum > maximum
+                        or not minimum <= value <= maximum
+                    ):
+                        self._clear_pending_write(circuit_index, changed_value)
+                        if not self._pending_writes.get(circuit_index):
+                            self._last_error.pop(circuit_index, None)
                         _LOGGER.warning(
                             "Shift %s for %s is outside ViCare limits %s to %s",
                             value,
@@ -363,8 +414,9 @@ class ViCareCurveSync:
                     slope,
                 )
 
-                self._last_error.pop(circuit_index, None)
-                self._pending_writes.pop(circuit_index, None)
+                self._clear_pending_write(circuit_index, changed_value)
+                if not self._pending_writes.get(circuit_index):
+                    self._last_error.pop(circuit_index, None)
 
                 _LOGGER.info(
                     "Updated ViCare %s: slope=%s, shift=%s",
@@ -375,7 +427,9 @@ class ViCareCurveSync:
 
             except Exception as err:
                 self._last_error[circuit_index] = str(err)
-                self._pending_writes[circuit_index] = (changed_value, value)
+                self._pending_writes.setdefault(circuit_index, {})[
+                    changed_value
+                ] = value
                 _LOGGER.warning(
                     "Could not write heating curve to ViCare for %s: %s",
                     mapping["name"],

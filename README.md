@@ -1,4 +1,3 @@
-
 # ViCare Heating Curve Sync
 
 Home Assistant custom integration for bidirectional synchronization between ViCare heating curves and `input_number` helpers.
@@ -9,13 +8,14 @@ Home Assistant custom integration for bidirectional synchronization between ViCa
 - Writes changes from Home Assistant helpers back to ViCare.
 - Supports two ViCare heating circuits.
 - Uses the official Home Assistant ViCare integration.
+- Includes automatic retry handling for communication errors.
 
 ## Helper mapping
 
-| Heating circuit | Heating system | Slope | Shift |
-|---|---|---|---|
-| Heating circuit 1 | Radiators | `input_number.steigung` | `input_number.niveau` |
-| Heating circuit 2 | Underfloor heating | `input_number.steigung_fbhz` | `input_number.niveau_fbhz` |
+| **Heating circuit** | **Heating system** | **Slope**                    | **Shift**                  |
+| ------------------- | ------------------ | ---------------------------- | -------------------------- |
+| Heating circuit 1   | Radiators          | `input_number.steigung`      | `input_number.niveau`      |
+| Heating circuit 2   | Underfloor heating | `input_number.steigung_fbhz` | `input_number.niveau_fbhz` |
 
 ## Requirements
 
@@ -23,6 +23,19 @@ Home Assistant custom integration for bidirectional synchronization between ViCa
 - Official ViCare integration
 - Two ViCare heating circuits with supported heating curves
 - Four `input_number` helpers listed above
+
+## Tested hardware
+
+The integration has been tested with the following Viessmann heating system:
+
+- **Boiler:** Viessmann Vitodens 300-W B3HB
+- **ViCare connection:** Official Home Assistant ViCare integration
+- **Heating circuit 1:** Radiators
+- **Heating circuit 2:** Underfloor heating
+
+The Vitodens 300-W B3HB communicates with Home Assistant through the official ViCare integration.
+
+**Note:** Successful testing with this model does not guarantee compatibility with every Viessmann heating system or configuration.
 
 ## Installation
 
@@ -40,12 +53,12 @@ The integration has been manually tested with Home Assistant Core 2026.11.1 and 
 
 All four heating curve values were successfully tested in both directions:
 
-| Heating circuit | Value | ViCare → Home Assistant | Home Assistant → ViCare |
-|---|---|---|---|
-| Circuit 1 – Radiators | Slope | Passed | Passed |
-| Circuit 1 – Radiators | Shift | Passed | Passed |
-| Circuit 2 – Underfloor heating | Slope | Passed | Passed |
-| Circuit 2 – Underfloor heating | Shift | Passed | Passed |
+| **Heating circuit**            | **Value** | **ViCare → Home Assistant** | **Home Assistant → ViCare** |
+| ------------------------------ | --------- | --------------------------- | --------------------------- |
+| Circuit 1 – Radiators          | Slope     | Passed                      | Passed                      |
+| Circuit 1 – Radiators          | Shift     | Passed                      | Passed                      |
+| Circuit 2 – Underfloor heating | Slope     | Passed                      | Passed                      |
+| Circuit 2 – Underfloor heating | Shift     | Passed                      | Passed                      |
 
 The tests confirmed that changes made in the ViCare app are automatically transferred to Home Assistant and changes made to the Home Assistant helpers are written back to ViCare.
 

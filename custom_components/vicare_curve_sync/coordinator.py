@@ -7,8 +7,8 @@ import asyncio
 import logging
 import math
 
-from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.config_entries import ConfigEntryState
+from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.helpers.event import async_track_state_change_event
 
 from .const import CIRCUIT_HELPERS
@@ -18,8 +18,11 @@ _LOGGER = logging.getLogger(__name__)
 RETRY_DELAY = 60
 VALUE_TOLERANCE = 0.0001
 
+
 def _get_supported_circuits(api):
     """Load and validate the first two ViCare heating circuits."""
+    
+    
     try:
         circuits = api.circuits
 
@@ -37,6 +40,7 @@ def _get_supported_circuits(api):
 
     except Exception:
         return None
+
 
 class ViCareCurveSync:
     """Synchronize ViCare heating circuits with HA input_number helpers."""
@@ -112,7 +116,7 @@ class ViCareCurveSync:
 
             if (
                 coordinator is None
-                or not coordinator.last_update_success
+                or not getattr(coordinator, "last_update_success", False)
             ):
                 return False
 
@@ -310,6 +314,7 @@ class ViCareCurveSync:
         if had_error:
             self._schedule_retry()
 
+    
     async def _set_helper_if_changed(
         self, entity_id: str, value: float
     ) -> None:
@@ -317,11 +322,9 @@ class ViCareCurveSync:
         state = self.hass.states.get(entity_id)
 
         if state is None:
-            _LOGGER.warning(
-                "Configured helper %s does not exist",
-                entity_id,
+            raise ValueError(
+                f"Configured helper {entity_id} does not exist"
             )
-            return
 
         try:
             current = float(state.state)
@@ -340,15 +343,14 @@ class ViCareCurveSync:
             minimum = float("-inf")
             maximum = float("inf")
 
-        if not math.isfinite(value) or not minimum <= value <= maximum:
-            _LOGGER.warning(
-                "ViCare value %s for %s is outside helper range %s to %s",
-                value,
-                entity_id,
-                minimum,
-                maximum,
+        if (
+            not math.isfinite(value)
+            or not minimum <= value <= maximum
+        ):
+            raise ValueError(
+                f"ViCare value {value} for {entity_id} is outside "
+                f"helper range {minimum} to {maximum}"
             )
-            return
 
         await self.hass.services.async_call(
             "input_number",

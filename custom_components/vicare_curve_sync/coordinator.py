@@ -264,7 +264,6 @@ class ViCareCurveSync:
         """Copy current ViCare values into the HA helpers."""
         if self._stopped:
             return
-            
         if not await self._async_refresh_vicare_references():
             self._last_error[-1] = "ViCare is not ready"
             self._schedule_retry()

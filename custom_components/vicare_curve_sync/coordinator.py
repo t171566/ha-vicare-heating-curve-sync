@@ -8,6 +8,7 @@ import logging
 import math
 
 from homeassistant.core import Event, HomeAssistant, callback
+from homeassistant.config_entries import ConfigEntryState
 from homeassistant.helpers.event import async_track_state_change_event
 
 from .const import CIRCUIT_HELPERS
@@ -15,27 +16,124 @@ from .const import CIRCUIT_HELPERS
 _LOGGER = logging.getLogger(__name__)
 
 RETRY_DELAY = 60
-MAX_RETRIES = 3
 VALUE_TOLERANCE = 0.0001
 
+def _get_supported_circuits(api):
+    """Load and validate the first two ViCare heating circuits."""
+    try:
+        circuits = api.circuits
+
+        if circuits is None or len(circuits) < 2:
+            return None
+
+        for circuit in circuits[:2]:
+            slope = float(circuit.getHeatingCurveSlope())
+            shift = float(circuit.getHeatingCurveShift())
+
+            if not math.isfinite(slope) or not math.isfinite(shift):
+                return None
+
+        return circuits
+
+    except Exception:
+        return None
 
 class ViCareCurveSync:
     """Synchronize ViCare heating circuits with HA input_number helpers."""
 
-    def __init__(self, hass: HomeAssistant, vicare_device, circuits) -> None:
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        vicare_entry_id: str,
+        selected_device_id: str,
+    ) -> None:
+   
         """Initialize the synchronizer."""
         self.hass = hass
-        self.device = vicare_device
-        self.circuits = circuits
+        self.vicare_entry_id = vicare_entry_id
+        self.selected_device_id = selected_device_id
+
+        self.device = None
+        self.circuits = None
 
         self._remove_state_listener = None
         self._remove_coordinator_listener = None
+        self._coordinator = None
         self._lock = asyncio.Lock()
         self._stopped = False
         self._retry_task = None
         self._last_error = {}
         self._pending_writes = {}
 
+
+    async def _async_refresh_vicare_references(self) -> bool:
+        """Resolve current ViCare device, circuits and coordinator."""
+        if self._stopped:
+            return False
+
+        vicare_entry = self.hass.config_entries.async_get_entry(
+            self.vicare_entry_id
+        )
+
+        if (
+            vicare_entry is None
+            or vicare_entry.domain != "vicare"
+            or vicare_entry.state is not ConfigEntryState.LOADED
+        ):
+            return False
+
+        vicare_data = getattr(vicare_entry, "runtime_data", None)
+
+        if vicare_data is None:
+            return False
+
+        devices = getattr(vicare_data, "devices", [])
+
+        for index, device in enumerate(devices):
+            device_id = device.serial or str(index)
+
+            if device_id != self.selected_device_id:
+                continue
+
+            api = getattr(device, "api", None)
+
+            if api is None:
+                return False
+
+            circuits = await self.hass.async_add_executor_job(
+                _get_supported_circuits,
+                api,
+            )
+
+            if circuits is None:
+                return False
+
+            coordinator = getattr(device, "coordinator", None)
+
+            if (
+                coordinator is None
+                or not coordinator.last_update_success
+            ):
+                return False
+
+            if coordinator is not self._coordinator:
+                if self._remove_coordinator_listener is not None:
+                    self._remove_coordinator_listener()
+                    self._remove_coordinator_listener = None
+
+                self._coordinator = coordinator
+                self._remove_coordinator_listener = (
+                    coordinator.async_add_listener(
+                        self._handle_coordinator_update
+                    )
+                )
+
+            self.device = device
+            self.circuits = circuits
+            return True
+
+        return False
+        
     async def async_start(self) -> None:
         """Start listeners and perform initial synchronization."""
         entities = [
@@ -50,16 +148,15 @@ class ViCareCurveSync:
             self._async_state_changed,
         )
 
-        coordinator = self.device.coordinator
-        if coordinator is not None:
-            self._remove_coordinator_listener = (
-                coordinator.async_add_listener(
-                    self._handle_coordinator_update
-                )
+        if not await self._async_refresh_vicare_references():
+            _LOGGER.warning(
+                "ViCare is not ready yet; synchronization will be retried"
             )
+            self._schedule_retry()
+            return
 
-        await self.async_update_helpers_from_vicare()
-
+        await self.async_update_helpers_from_vicare()    
+    
     @callback
     def _handle_coordinator_update(self) -> None:
         """Refresh helpers and retry pending writes after ViCare updates."""
@@ -109,6 +206,9 @@ class ViCareCurveSync:
         self, circuit_index: int
     ) -> tuple[float, float]:
         """Read slope and shift from ViCare."""
+        if self.circuits is None:
+            raise RuntimeError("ViCare heating circuits are not available")
+
         circuit = self.circuits[circuit_index]
 
         return await self.hass.async_add_executor_job(
@@ -117,9 +217,9 @@ class ViCareCurveSync:
                 float(circuit.getHeatingCurveShift()),
             )
         )
-
+        
     def _schedule_retry(self) -> None:
-        """Schedule a delayed retry after a communication error."""
+        """Schedule retries until ViCare synchronization recovers."""
         if self._stopped:
             return
 
@@ -128,17 +228,13 @@ class ViCareCurveSync:
 
         async def retry() -> None:
             try:
-                for attempt in range(1, MAX_RETRIES + 1):
+                while not self._stopped:
                     await asyncio.sleep(RETRY_DELAY)
 
                     if self._stopped:
                         return
 
-                    _LOGGER.info(
-                        "Retrying ViCare synchronization (%s/%s)",
-                        attempt,
-                        MAX_RETRIES,
-                    )
+                    _LOGGER.info("Retrying ViCare synchronization")
 
                     await self.async_update_helpers_from_vicare()
 
@@ -153,6 +249,7 @@ class ViCareCurveSync:
                                 changed_value,
                                 value,
                             )
+
                     if not self._last_error and not self._pending_writes:
                         return
 
@@ -162,11 +259,18 @@ class ViCareCurveSync:
                 self._retry_task = None
 
         self._retry_task = self.hass.async_create_task(retry())
-
+        
     async def async_update_helpers_from_vicare(self) -> None:
         """Copy current ViCare values into the HA helpers."""
         if self._stopped:
             return
+            
+        if not await self._async_refresh_vicare_references():
+            self._last_error[-1] = "ViCare is not ready"
+            self._schedule_retry()
+            return
+
+        self._last_error.pop(-1, None)
 
         had_error = False
 
@@ -326,6 +430,14 @@ class ViCareCurveSync:
 
         async with self._lock:
             if self._stopped:
+                return
+
+            if not await self._async_refresh_vicare_references():
+                self._pending_writes.setdefault(circuit_index, {})[
+                    changed_value
+                ] = value
+                self._last_error[circuit_index] = "ViCare is not ready"
+                self._schedule_retry()
                 return
 
             circuit = self.circuits[circuit_index]

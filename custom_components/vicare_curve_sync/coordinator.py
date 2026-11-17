@@ -7,6 +7,7 @@ import asyncio
 import logging
 import math
 
+from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.helpers.event import async_track_state_change_event
 
@@ -15,27 +16,154 @@ from .const import CIRCUIT_HELPERS
 _LOGGER = logging.getLogger(__name__)
 
 RETRY_DELAY = 60
-MAX_RETRIES = 3
 VALUE_TOLERANCE = 0.0001
+
+
+def _get_supported_circuits(api):
+    """Load and validate the first two ViCare heating circuits."""
+   
+    try:
+        circuits = api.circuits
+
+        if circuits is None or len(circuits) < 2:
+            return None
+
+        for circuit in circuits[:2]:
+            slope = float(circuit.getHeatingCurveSlope())
+            shift = float(circuit.getHeatingCurveShift())
+
+            if not math.isfinite(slope) or not math.isfinite(shift):
+                return None
+
+        return circuits
+
+    except Exception:
+        return None
 
 
 class ViCareCurveSync:
     """Synchronize ViCare heating circuits with HA input_number helpers."""
 
-    def __init__(self, hass: HomeAssistant, vicare_device, circuits) -> None:
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        vicare_entry_id: str,
+        selected_device_id: str,
+    ) -> None:
         """Initialize the synchronizer."""
         self.hass = hass
-        self.device = vicare_device
-        self.circuits = circuits
+        self.vicare_entry_id = vicare_entry_id
+        self.selected_device_id = selected_device_id
+
+        self.device = None
+        self.circuits = None
 
         self._remove_state_listener = None
         self._remove_coordinator_listener = None
+        self._remove_vicare_state_listener = None
+        self._coordinator = None
         self._lock = asyncio.Lock()
         self._stopped = False
         self._retry_task = None
         self._last_error = {}
         self._pending_writes = {}
 
+    async def _async_refresh_vicare_references(self) -> bool:
+        """Resolve current ViCare device, circuits and coordinator."""
+        if self._stopped:
+            return False
+
+        vicare_entry = self.hass.config_entries.async_get_entry(
+            self.vicare_entry_id
+        )
+
+        if (
+            vicare_entry is None
+            or vicare_entry.domain != "vicare"
+            or vicare_entry.state is not ConfigEntryState.LOADED
+        ):
+            return False
+
+        vicare_data = getattr(vicare_entry, "runtime_data", None)
+
+        if vicare_data is None:
+            return False
+
+        devices = getattr(vicare_data, "devices", None)
+
+        if devices is None:
+            return False
+
+        for index, device in enumerate(devices):
+            device_id = device.serial or str(index)
+
+            if device_id != self.selected_device_id:
+                continue
+
+            api = getattr(device, "api", None)
+
+            if api is None:
+                return False
+
+            circuits = await self.hass.async_add_executor_job(
+                _get_supported_circuits,
+                api,
+            )
+
+            if circuits is None:
+                return False
+
+            # Verify that ViCare was not unloaded or reloaded
+            # while the circuits were being read.
+            current_entry = self.hass.config_entries.async_get_entry(
+                self.vicare_entry_id
+            )
+
+            if (
+                current_entry is not vicare_entry
+                or current_entry.state is not ConfigEntryState.LOADED
+                or getattr(current_entry, "runtime_data", None)
+                is not vicare_data
+            ):
+                return False
+
+            current_devices = getattr(vicare_data, "devices", [])
+
+            if not any(
+                current_device is device
+                for current_device in current_devices
+            ):
+                return False
+
+            if getattr(device, "api", None) is not api:
+                return False
+  
+            coordinator = getattr(device, "coordinator", None)
+
+            if (
+                coordinator is None
+                or not getattr(coordinator, "last_update_success", False)
+            ):
+                return False
+
+            if coordinator is not self._coordinator:
+                if self._remove_coordinator_listener is not None:
+                    self._remove_coordinator_listener()
+                    self._remove_coordinator_listener = None
+
+                self._coordinator = coordinator
+                self._remove_coordinator_listener = (
+                    coordinator.async_add_listener(
+                        self._handle_coordinator_update
+                    )
+                )
+
+            self.device = device
+            self.circuits = circuits
+            return True
+
+        return False
+ 
     async def async_start(self) -> None:
         """Start listeners and perform initial synchronization."""
         entities = [
@@ -49,16 +177,66 @@ class ViCareCurveSync:
             entities,
             self._async_state_changed,
         )
+        vicare_entry = self.hass.config_entries.async_get_entry(
+            self.vicare_entry_id
+        )
 
-        coordinator = self.device.coordinator
-        if coordinator is not None:
-            self._remove_coordinator_listener = (
-                coordinator.async_add_listener(
-                    self._handle_coordinator_update
-                )
+        if vicare_entry is None:
+            raise RuntimeError("ViCare configuration entry was not found")
+
+        self._remove_vicare_state_listener = (
+            vicare_entry.async_on_state_change(
+                self._handle_vicare_state_change
             )
+        )
+
+        if not await self._async_refresh_vicare_references():
+            _LOGGER.warning(
+                "ViCare is not ready yet; synchronization will be retried"
+            )
+            self._schedule_retry()
+            return
 
         await self.async_update_helpers_from_vicare()
+
+    @callback
+    def _handle_vicare_state_change(self) -> None:
+        """Handle state changes of the official ViCare config entry."""
+        if self._stopped:
+            return
+
+        self.hass.async_create_task(
+            self._async_handle_vicare_state_change()
+        )
+ 
+    async def _async_handle_vicare_state_change(self) -> None:
+        """Reconnect to ViCare after its config entry changes state."""
+        if self._stopped:
+            return
+
+        vicare_entry = self.hass.config_entries.async_get_entry(
+            self.vicare_entry_id
+        )
+
+        if vicare_entry is None:
+            return
+
+        if vicare_entry.state is not ConfigEntryState.LOADED:
+            async with self._lock:
+                if self._stopped:
+                    return
+
+                if self._remove_coordinator_listener is not None:
+                    self._remove_coordinator_listener()
+                    self._remove_coordinator_listener = None
+
+                self._coordinator = None
+                self.device = None
+                self.circuits = None
+
+            return
+
+        await self._async_handle_coordinator_update()
 
     @callback
     def _handle_coordinator_update(self) -> None:
@@ -103,12 +281,19 @@ class ViCareCurveSync:
 
         if self._remove_coordinator_listener is not None:
             self._remove_coordinator_listener()
-            self._remove_coordinator_listener = None 
+            self._remove_coordinator_listener = None
+
+        if self._remove_vicare_state_listener is not None:
+            self._remove_vicare_state_listener()
+            self._remove_vicare_state_listener = None
 
     async def _read_curve(
         self, circuit_index: int
     ) -> tuple[float, float]:
         """Read slope and shift from ViCare."""
+        if self.circuits is None:
+            raise RuntimeError("ViCare heating circuits are not available")
+
         circuit = self.circuits[circuit_index]
 
         return await self.hass.async_add_executor_job(
@@ -119,7 +304,7 @@ class ViCareCurveSync:
         )
 
     def _schedule_retry(self) -> None:
-        """Schedule a delayed retry after a communication error."""
+        """Schedule retries until ViCare synchronization recovers."""
         if self._stopped:
             return
 
@@ -128,17 +313,13 @@ class ViCareCurveSync:
 
         async def retry() -> None:
             try:
-                for attempt in range(1, MAX_RETRIES + 1):
+                while not self._stopped:
                     await asyncio.sleep(RETRY_DELAY)
 
                     if self._stopped:
                         return
 
-                    _LOGGER.info(
-                        "Retrying ViCare synchronization (%s/%s)",
-                        attempt,
-                        MAX_RETRIES,
-                    )
+                    _LOGGER.info("Retrying ViCare synchronization")
 
                     await self.async_update_helpers_from_vicare()
 
@@ -153,6 +334,7 @@ class ViCareCurveSync:
                                 changed_value,
                                 value,
                             )
+
                     if not self._last_error and not self._pending_writes:
                         return
 
@@ -169,43 +351,119 @@ class ViCareCurveSync:
             return
 
         had_error = False
+        refresh_failed = False
 
         async with self._lock:
-            for circuit_index, mapping in CIRCUIT_HELPERS.items():
-                try:
-                    slope, shift = await self._read_curve(circuit_index)
+            if self._stopped:
+                return
 
-                    if not math.isfinite(slope) or not math.isfinite(shift):
-                        raise ValueError("ViCare returned an invalid curve value")
+            if not await self._async_refresh_vicare_references():
+                self._last_error[-1] = "ViCare is not ready"
+                refresh_failed = True
+            else:
+                self._last_error.pop(-1, None)
 
-                    pending = self._pending_writes.get(circuit_index, {})
+                for circuit_index, mapping in CIRCUIT_HELPERS.items():
+                    try:
+                        vicare_entry = self.hass.config_entries.async_get_entry(
+                            self.vicare_entry_id
+                        )
+                        vicare_data = getattr(
+                            vicare_entry, "runtime_data", None
+                        )
+                        device = self.device
+                        api = getattr(device, "api", None)
+                        circuits = self.circuits
 
-                    if "slope" not in pending:
-                        await self._set_helper_if_changed(
-                            mapping["slope"], slope
+                        if (
+                            vicare_entry is None
+                            or vicare_data is None
+                            or device is None
+                            or api is None
+                            or circuits is None
+                            or not 0 <= circuit_index < len(circuits)
+                        ):
+                            raise RuntimeError(
+                                "ViCare references are not available"
+                            )
+
+                        circuit = circuits[circuit_index]
+
+                        slope, shift = await self._read_curve(circuit_index)
+
+                        if not self._has_current_vicare_references(
+                            vicare_entry,
+                            vicare_data,
+                            device,
+                            api,
+                            circuits,
+                            circuit_index,
+                            circuit,
+                        ):
+                            raise RuntimeError(
+                                "ViCare references changed while reading"
+                            )
+
+                        if not math.isfinite(slope) or not math.isfinite(shift):
+                            raise ValueError(
+                                "ViCare returned an invalid curve value"
+                            )
+
+                        pending = self._pending_writes.get(circuit_index, {})
+
+                        if "slope" not in pending:
+                            await self._set_helper_if_changed(
+                                mapping["slope"], slope
+                            )
+
+                        if not self._has_current_vicare_references(
+                            vicare_entry,
+                            vicare_data,
+                            device,
+                            api,
+                            circuits,
+                            circuit_index,
+                            circuit,
+                        ):
+                            raise RuntimeError(
+                                "ViCare references changed while updating helpers"
+                            )
+
+                        if "shift" not in pending:
+                            await self._set_helper_if_changed(
+                                mapping["shift"], shift
+                            )
+                            
+                        if not self._has_current_vicare_references(
+                            vicare_entry,
+                            vicare_data,
+                            device,
+                            api,
+                            circuits,
+                            circuit_index,
+                            circuit,
+                        ):
+                            raise RuntimeError(
+                                "ViCare references changed after updating helpers"
+                            )
+                            
+                        if not self._pending_writes.get(circuit_index):
+                            self._last_error.pop(circuit_index, None)
+
+                    except Exception as err:
+                        had_error = True
+                        self._last_error[circuit_index] = str(err)
+                        _LOGGER.warning(
+                            "Could not read ViCare heating curve for %s "
+                            "(circuit %s): %s",
+                            mapping["name"],
+                            circuit_index,
+                            err,
                         )
 
-                    if "shift" not in pending:
-                        await self._set_helper_if_changed(
-                            mapping["shift"], shift
-                        )
-                        
-                    if not self._pending_writes.get(circuit_index):
-                        self._last_error.pop(circuit_index, None)
-
-                except Exception as err:
-                    had_error = True
-                    self._last_error[circuit_index] = str(err)
-                    _LOGGER.warning(
-                        "Could not read ViCare heating curve for %s "
-                        "(circuit %s): %s",
-                        mapping["name"],
-                        circuit_index,
-                        err,
-                    )
-
-        if had_error:
+        if refresh_failed or had_error:
             self._schedule_retry()
+
 
     async def _set_helper_if_changed(
         self, entity_id: str, value: float
@@ -214,11 +472,9 @@ class ViCareCurveSync:
         state = self.hass.states.get(entity_id)
 
         if state is None:
-            _LOGGER.warning(
-                "Configured helper %s does not exist",
-                entity_id,
+            raise ValueError(
+                f"Configured helper {entity_id} does not exist"
             )
-            return
 
         try:
             current = float(state.state)
@@ -237,15 +493,14 @@ class ViCareCurveSync:
             minimum = float("-inf")
             maximum = float("inf")
 
-        if not math.isfinite(value) or not minimum <= value <= maximum:
-            _LOGGER.warning(
-                "ViCare value %s for %s is outside helper range %s to %s",
-                value,
-                entity_id,
-                minimum,
-                maximum,
+        if (
+            not math.isfinite(value)
+            or not minimum <= value <= maximum
+        ):
+            raise ValueError(
+                f"ViCare value {value} for {entity_id} is outside "
+                f"helper range {minimum} to {maximum}"
             )
-            return
 
         await self.hass.services.async_call(
             "input_number",
@@ -270,7 +525,7 @@ class ViCareCurveSync:
 
         if not pending:
             self._pending_writes.pop(circuit_index, None)
-    
+ 
     @callback
     def _async_state_changed(self, event: Event) -> None:
         """Handle manual changes of HA input_number helpers."""
@@ -312,6 +567,43 @@ class ViCareCurveSync:
                 )
                 return
 
+    def _has_current_vicare_references(
+        self,
+        vicare_entry,
+        vicare_data,
+        device,
+        api,
+        circuits,
+        circuit_index: int,
+        circuit,
+    ) -> bool:
+        """Check whether the ViCare references are still current."""
+        current_entry = self.hass.config_entries.async_get_entry(
+            self.vicare_entry_id
+        )
+
+        if (
+            current_entry is not vicare_entry
+            or current_entry is None
+            or current_entry.state is not ConfigEntryState.LOADED
+            or getattr(current_entry, "runtime_data", None) is not vicare_data
+        ):
+            return False
+
+        current_devices = getattr(vicare_data, "devices", None)
+
+        if current_devices is None:
+            return False
+
+        return (
+            any(current_device is device for current_device in current_devices)
+            and getattr(device, "api", None) is api
+            and self.device is device
+            and self.circuits is circuits
+            and 0 <= circuit_index < len(circuits)
+            and circuits[circuit_index] is circuit
+        )
+
     async def _async_write_curve(
         self,
         circuit_index: int,
@@ -328,10 +620,54 @@ class ViCareCurveSync:
             if self._stopped:
                 return
 
-            circuit = self.circuits[circuit_index]
+            if not await self._async_refresh_vicare_references():
+                self._pending_writes.setdefault(circuit_index, {})[
+                    changed_value
+                ] = value
+                self._last_error[circuit_index] = "ViCare is not ready"
+                self._schedule_retry()
+                return
+
+            vicare_entry = self.hass.config_entries.async_get_entry(
+                self.vicare_entry_id
+            )
+            vicare_data = getattr(vicare_entry, "runtime_data", None)
+            device = self.device
+            api = getattr(device, "api", None)
+            circuits = self.circuits
+
+            if (
+                vicare_entry is None
+                or vicare_data is None
+                or device is None
+                or api is None
+                or circuits is None
+                or not 0 <= circuit_index < len(circuits)
+            ):
+                self._pending_writes.setdefault(circuit_index, {})[
+                    changed_value
+                ] = value
+                self._last_error[circuit_index] = "ViCare is not ready"
+                self._schedule_retry()
+                return
+
+            circuit = circuits[circuit_index]
 
             try:
                 slope, shift = await self._read_curve(circuit_index)
+                
+                if not self._has_current_vicare_references(
+                    vicare_entry,
+                    vicare_data,
+                    device,
+                    api,
+                    circuits,
+                    circuit_index,
+                    circuit,
+                ):
+                    raise RuntimeError(
+                        "ViCare references changed while reading"
+                    )
 
                 if not math.isfinite(slope) or not math.isfinite(shift):
                     raise ValueError(
@@ -408,11 +744,47 @@ class ViCareCurveSync:
 
                     shift = value
 
+                if not self._has_current_vicare_references(
+                    vicare_entry,
+                    vicare_data,
+                    device,
+                    api,
+                    circuits,
+                    circuit_index,
+                    circuit,
+                ):
+                    self._pending_writes.setdefault(circuit_index, {})[
+                        changed_value
+                    ] = value
+                    self._last_error[circuit_index] = (
+                        "ViCare references changed before write"
+                    )
+                    self._schedule_retry()
+                    return
+                    
                 await self.hass.async_add_executor_job(
                     circuit.setHeatingCurve,
                     shift,
                     slope,
                 )
+
+                if not self._has_current_vicare_references(
+                    vicare_entry,
+                    vicare_data,
+                    device,
+                    api,
+                    circuits,
+                    circuit_index,
+                    circuit,
+                ):
+                    self._pending_writes.setdefault(circuit_index, {})[
+                        changed_value
+                    ] = value
+                    self._last_error[circuit_index] = (
+                        "ViCare references changed during write"
+                    )
+                    self._schedule_retry()
+                    return
 
                 self._clear_pending_write(circuit_index, changed_value)
                 if not self._pending_writes.get(circuit_index):

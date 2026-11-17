@@ -18,6 +18,7 @@ _LOGGER = logging.getLogger(__name__)
 RETRY_DELAY = 60
 VALUE_TOLERANCE = 0.0001
 
+
 def _get_supported_circuits(api):
     """Load and validate the first two ViCare heating circuits."""
    
@@ -39,6 +40,7 @@ def _get_supported_circuits(api):
     except Exception:
         return None
 
+
 class ViCareCurveSync:
     """Synchronize ViCare heating circuits with HA input_number helpers."""
 
@@ -48,7 +50,6 @@ class ViCareCurveSync:
         vicare_entry_id: str,
         selected_device_id: str,
     ) -> None:
-
         """Initialize the synchronizer."""
         self.hass = hass
         self.vicare_entry_id = vicare_entry_id
@@ -71,8 +72,7 @@ class ViCareCurveSync:
         """Resolve current ViCare device, circuits and coordinator."""
         if self._stopped:
             return False
- 
-    
+
         vicare_entry = self.hass.config_entries.async_get_entry(
             self.vicare_entry_id
         )
@@ -89,7 +89,10 @@ class ViCareCurveSync:
         if vicare_data is None:
             return False
 
-        devices = getattr(vicare_data, "devices", [])
+        devices = getattr(vicare_data, "devices", None)
+
+        if devices is None:
+            return False
 
         for index, device in enumerate(devices):
             device_id = device.serial or str(index)
@@ -109,7 +112,7 @@ class ViCareCurveSync:
 
             if circuits is None:
                 return False
-    
+
             # Verify that ViCare was not unloaded or reloaded
             # while the circuits were being read.
             current_entry = self.hass.config_entries.async_get_entry(
@@ -194,7 +197,7 @@ class ViCareCurveSync:
             self._schedule_retry()
             return
 
-        await self.async_update_helpers_from_vicare()    
+        await self.async_update_helpers_from_vicare()
 
     @callback
     def _handle_vicare_state_change(self) -> None:
@@ -234,7 +237,6 @@ class ViCareCurveSync:
             return
 
         await self._async_handle_coordinator_update()
-
 
     @callback
     def _handle_coordinator_update(self) -> None:
@@ -431,7 +433,20 @@ class ViCareCurveSync:
                             await self._set_helper_if_changed(
                                 mapping["shift"], shift
                             )
-
+                            
+                        if not self._has_current_vicare_references(
+                            vicare_entry,
+                            vicare_data,
+                            device,
+                            api,
+                            circuits,
+                            circuit_index,
+                            circuit,
+                        ):
+                            raise RuntimeError(
+                                "ViCare references changed after updating helpers"
+                            )
+                            
                         if not self._pending_writes.get(circuit_index):
                             self._last_error.pop(circuit_index, None)
 
@@ -575,7 +590,10 @@ class ViCareCurveSync:
         ):
             return False
 
-        current_devices = getattr(vicare_data, "devices", [])
+        current_devices = getattr(vicare_data, "devices", None)
+
+        if current_devices is None:
+            return False
 
         return (
             any(current_device is device for current_device in current_devices)
@@ -743,6 +761,7 @@ class ViCareCurveSync:
                     )
                     self._schedule_retry()
                     return
+                    
                 await self.hass.async_add_executor_job(
                     circuit.setHeatingCurve,
                     shift,
@@ -758,6 +777,9 @@ class ViCareCurveSync:
                     circuit_index,
                     circuit,
                 ):
+                    self._pending_writes.setdefault(circuit_index, {})[
+                        changed_value
+                    ] = value
                     self._last_error[circuit_index] = (
                         "ViCare references changed during write"
                     )
